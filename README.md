@@ -25,12 +25,12 @@ Desenvolver e simular no **Wokwi** o **controle remoto** do robô explorador esp
 
 ---
 
-## 🔗 Link do Projeto no Wokwi
-- [Acessar Simulação no Wokwi](https://velxio.dev/project/30a22f6f-aa6a-4abe-a6c6-5e90e69ef379)
+## 🔗 Link do Projeto no Velxio
+- [Acessar Simulação no Velxio](https://velxio.dev/project/30a22f6f-aa6a-4abe-a6c6-5e90e69ef379)
 
 ---
 
-## 🚀 Como Rodar no Wokwi
+## 🚀 Como Rodar no Velxio
 1. Abra o link do projeto no **Velxio**.
 2. Clique no botão **Start Simulation** (botão verde de "Play").
 3. Abra a aba **Serial Monitor** para visualizar as saídas e mensagens enviadas.
