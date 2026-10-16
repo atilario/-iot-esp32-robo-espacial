@@ -5,7 +5,7 @@ Repositório do projeto **iot-esp32-robo-espacial** desenvolvido para a prática
 ---
 
 ##  Objetivo da Etapa
-Desenvolver e simular no **Wokwi** o **controle remoto** do robô explorador espacial utilizando uma placa **ESP32**. O controle é responsável por:
+Desenvolver e simular no **Velxio** o **controle remoto** do robô explorador espacial utilizando uma placa **ESP32**. O controle é responsável por:
 - Ler os comandos direcionais através de um **joystick analógico** (Frente, Trás, Esquerda, Direita).
 - Enviar comando para parar/desligar remotamente o robô através de um **botão de desligar**.
 - Indicar o status da comunicação através de **LEDs**:
