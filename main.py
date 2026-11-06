@@ -1,8 +1,7 @@
 import sqlite3
-import random
-from datetime import datetime, timedelta
+from datetime import datetime
 from contextlib import asynccontextmanager
-from typing import Optional, List
+from typing import Optional, List, Annotated
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
@@ -31,42 +30,10 @@ def init_db():
     conn.close()
 
 
-def popular_dados_iniciais(quantidade: int = 15):
-    """Povoa o banco com leituras de exemplo simulando o robô/ESP32 caso esteja vazio."""
-    init_db()
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*) FROM leituras")
-    total = cursor.fetchone()[0]
-
-    if total == 0:
-        agora = datetime.now()
-        leituras_mock = []
-        for i in range(quantidade):
-            tempo_reg = (agora - timedelta(minutes=(quantidade - i) * 2)).strftime("%Y-%m-%d %H:%M:%S")
-            nivel = random.randint(70, 95)
-            temperatura = round(random.uniform(22.0, 28.5), 1)
-            umidade = round(random.uniform(50.0, 75.0), 1)
-            luminosidade = random.randint(900, 2500)
-            presenca = 1 if random.random() > 0.4 else 0
-            ts_esp = 100000 + i * 120000
-
-            leituras_mock.append((nivel, temperatura, umidade, luminosidade, presenca, ts_esp, tempo_reg))
-
-        cursor.executemany("""
-            INSERT INTO leituras (nivel, temperatura, umidade, luminosidade, presenca, timestamp_esp, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, leituras_mock)
-        conn.commit()
-        print(f"[SQLite] Banco inicializado e povoado com {quantidade} registros iniciais.")
-
-    conn.close()
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Ao iniciar a API, garante a criação do banco e povoamento inicial
-    popular_dados_iniciais(15)
+    # Garante apenas que a estrutura do banco e tabela estejam criadas
+    init_db()
     yield
 
 
@@ -77,6 +44,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Habilita CORS para conexão com dashboards e interfaces
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -87,7 +55,7 @@ app.add_middleware(
 
 
 # ============================================================================
-# MODELOS PYDANTIC
+# MODELOS PYDANTIC (VALIDAÇÃO E TIPAGEM DOS DADOS)
 # ============================================================================
 class LeituraCreate(BaseModel):
     nivel: int = Field(..., description="Nível do tanque ou reservatório (%)")
@@ -124,8 +92,8 @@ def raiz():
 @app.post("/api/leituras", response_model=dict, status_code=201)
 def receber_leitura(dados: LeituraCreate):
     """
-    Recebe os dados brutos enviados pelo ESP32 (ou via serial_gateway.py)
-    e grava no SQLite.
+    Recebe os dados brutos enviados pelo ESP32 (direto via Wi-Fi ou pelo gateway serial)
+    e grava no banco de dados SQLite.
     """
     agora_iso = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -161,44 +129,8 @@ def receber_leitura(dados: LeituraCreate):
         raise HTTPException(status_code=500, detail=f"Erro ao salvar no banco SQLite: {str(e)}")
 
 
-@app.post("/api/povoar", response_model=dict, status_code=201)
-def povoar_banco(quantidade: int = Query(default=10, ge=1, le=100, description="Quantidade de registros a gerar")):
-    """
-    Endpoint manual para povoar o banco SQLite com dados simulados sob demanda.
-    """
-    agora = datetime.now()
-    leituras_geradas = []
-    for i in range(quantidade):
-        tempo_reg = (agora - timedelta(minutes=(quantidade - i) * 2)).strftime("%Y-%m-%d %H:%M:%S")
-        nivel = random.randint(60, 100)
-        temperatura = round(random.uniform(20.0, 32.0), 1)
-        umidade = round(random.uniform(40.0, 80.0), 1)
-        luminosidade = random.randint(800, 3000)
-        presenca = 1 if random.random() > 0.5 else 0
-        ts_esp = int(datetime.now().timestamp() * 1000) + (i * 1000)
-
-        leituras_geradas.append((nivel, temperatura, umidade, luminosidade, presenca, ts_esp, tempo_reg))
-
-    try:
-        conn = sqlite3.connect(DB_NAME)
-        cursor = conn.cursor()
-        cursor.executemany("""
-            INSERT INTO leituras (nivel, temperatura, umidade, luminosidade, presenca, timestamp_esp, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        """, leituras_geradas)
-        conn.commit()
-        conn.close()
-
-        return {
-            "status": "sucesso",
-            "mensagem": f"{quantidade} registros simulados inseridos com sucesso no SQLite!"
-        }
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Erro ao povoar SQLite: {str(e)}")
-
-
 @app.get("/api/leituras", response_model=List[LeituraResponse])
-def listar_leituras(limite: int = Query(default=20, ge=1, le=500, description="Quantidade de registros")):
+def listar_leituras(limite: Annotated[int, Query(ge=1, le=500, description="Quantidade de registros")] = 50):
     """
     Lista as últimas leituras gravadas em ordem decrescente (mais recente primeiro).
     """
@@ -225,7 +157,7 @@ def listar_leituras(limite: int = Query(default=20, ge=1, le=500, description="Q
 
 @app.get("/api/leituras/ultima", response_model=Optional[LeituraResponse])
 def obter_ultima_leitura():
-    """Retorna apenas o registro mais recente (útil para cards de dashboard)."""
+    """Retorna apenas o registro mais recente (útil para cards ou telas em tempo real)."""
     try:
         conn = sqlite3.connect(DB_NAME)
         conn.row_factory = sqlite3.Row
