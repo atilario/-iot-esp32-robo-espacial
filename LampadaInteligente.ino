@@ -2,17 +2,23 @@
 #include <DHT.h>
 #include <WiFi.h>
 #include <HTTPClient.h>
+#include <time.h> // Biblioteca nativa para controle de horário/NTP
 
 // ==========================================
 // CONFIGURAÇÃO WI-FI E API FASTAPI
 // ==========================================
-const char* WIFI_SSID     = "NOME_DA_SUA_REDE_WIFI";
-const char* WIFI_PASSWORD = "SENHA_DO_SEU_WIFI";
+const char* WIFI_SSID     = "motorola edge 50 pro_6985";
+const char* WIFI_PASSWORD = "123321123";
 
 // COLOQUE AQUI O LINK / ENDPOINT DA SUA API FASTAPI:
-// Exemplo local: "http://192.168.1.100:8000/telemetria"
-// Exemplo nuvem: "https://minha-api.onrender.com/telemetria"
-const char* API_URL = "http://SEU_IP_OU_DOMINIO:8000/telemetria";
+const char* API_URL = "http://10.134.42.63:8000/telemetria";
+
+// ==========================================
+// CONFIGURAÇÃO DO SERVIDOR NTP (TIMESTAMP)
+// ==========================================
+const char* NTP_SERVER = "pool.ntp.org";
+const long  GMT_OFFSET_SEC = 0;      // 0 para obter Timestamp Unix puro (UTC)
+const int   DAYLIGHT_OFFSET_SEC = 0; // Horário de verão (0 para desativado)
 
 // ==========================================
 // DEFINIÇÃO DOS PINOS (ESP32-S3)
@@ -43,7 +49,7 @@ const unsigned long TEMPO_DEBOUNCE = 250;
 int corR = 0, corG = 0, corB = 0;
 bool estadoLedRGB = false;
 
-// Controle de tempo para envio HTTP (envia a cada 5 segundos para não sobrecarregar)
+// Intervalo de envio para API (5 segundos)
 unsigned long tempoUltimoEnvio = 0;
 const unsigned long INTERVALO_ENVIO_API = 5000; 
 
@@ -86,7 +92,14 @@ void aplicarCorLed(int r, int g, int b) {
   analogWrite(PIN_LED_B, b);
 }
 
-void enviarParaFastAPI(float temp, int ldr, int pot, bool ledStatus, bool perigo, bool sistema) {
+// Função para obter o timestamp Unix atual
+unsigned long obterTimestampAtual() {
+  time_t agora;
+  time(&agora);
+  return (unsigned long)agora;
+}
+
+void enviarParaFastAPI(unsigned long ts, float temp, int ldr, int pot, bool ledStatus, bool perigo, bool sistema) {
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("[Wi-Fi] Desconectado. Pulando envio...");
     return;
@@ -96,12 +109,12 @@ void enviarParaFastAPI(float temp, int ldr, int pot, bool ledStatus, bool perigo
   http.begin(API_URL);
   http.addHeader("Content-Type", "application/json");
 
-  // Montagem do payload JSON
-  char jsonBuffer[256];
+  // Montagem do payload JSON contendo o campo "timestamp"
+  char jsonBuffer[300];
   snprintf(jsonBuffer, sizeof(jsonBuffer),
-    "{\"temperatura\":%.1f,\"luminosidade\":%d,\"potenciometro\":%d,"
+    "{\"timestamp\":%lu,\"temperatura\":%.1f,\"luminosidade\":%d,\"potenciometro\":%d,"
     "\"led_ligado\":%s,\"perigo\":%s,\"sistema_ativo\":%s}",
-    temp, ldr, pot,
+    ts, temp, ldr, pot,
     ledStatus ? "true" : "false",
     perigo ? "true" : "false",
     sistema ? "true" : "false"
@@ -148,8 +161,12 @@ void setup() {
     Serial.println("\nWi-Fi conectado com sucesso!");
     Serial.print("IP do ESP32: ");
     Serial.println(WiFi.localIP());
+
+    // Inicializa a sincronização de data/hora via NTP
+    configTime(GMT_OFFSET_SEC, DAYLIGHT_OFFSET_SEC, NTP_SERVER);
+    Serial.println("Sincronizando relogio NTP...");
   } else {
-    Serial.println("\nFalha ao conectar no Wi-Fi. O loop continuará offline.");
+    Serial.println("\nFalha ao conectar no Wi-Fi.");
   }
 }
 
@@ -187,14 +204,16 @@ void loop() {
   // Disparo periódico do envio HTTP e Log Serial
   if (millis() - tempoUltimoEnvio >= INTERVALO_ENVIO_API) {
     tempoUltimoEnvio = millis();
+    unsigned long timestampAtual = obterTimestampAtual();
 
     Serial.println("=========================================");
-    Serial.printf("Status Sistema:  %s\n", sistemaAtivo ? "ATIVO" : "DESATIVADO (MUTE)");
-    Serial.printf("Temperatura:     %.1f ºC\n", temperatura);
+    Serial.printf("Timestamp (Unix): %lu\n", timestampAtual);
+    Serial.printf("Status Sistema:   %s\n", sistemaAtivo ? "ATIVO" : "DESATIVADO (MUTE)");
+    Serial.printf("Temperatura:      %.1f ºC\n", temperatura);
     if (perigoTemperatura) Serial.println(">>> Perigo! Desligar! <<<");
-    Serial.printf("Estado LED RGB:  %s | LDR: %d | Pot: %d\n", estadoLedRGB ? "ON" : "OFF", leituraLDR, leituraPot);
+    Serial.printf("Estado LED RGB:   %s | LDR: %d | Pot: %d\n", estadoLedRGB ? "ON" : "OFF", leituraLDR, leituraPot);
 
-    // Envio para FastAPI
-    enviarParaFastAPI(temperatura, leituraLDR, leituraPot, estadoLedRGB, perigoTemperatura, sistemaAtivo);
+    // Envio para FastAPI com timestamp
+    enviarParaFastAPI(timestampAtual, temperatura, leituraLDR, leituraPot, estadoLedRGB, perigoTemperatura, sistemaAtivo);
   }
 }

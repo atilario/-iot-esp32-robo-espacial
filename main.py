@@ -1,5 +1,5 @@
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timezone
 from contextlib import asynccontextmanager
 from typing import Optional, List, Annotated
 from fastapi import FastAPI, HTTPException, Query
@@ -16,6 +16,7 @@ def init_db():
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS telemetria (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp INTEGER NOT NULL,
             temperatura REAL NOT NULL,
             luminosidade INTEGER NOT NULL,
             potenciometro INTEGER NOT NULL,
@@ -26,6 +27,7 @@ def init_db():
         )
     """)
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_telemetria_created_at ON telemetria(created_at)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_telemetria_timestamp ON telemetria(timestamp)")
     conn.commit()
     conn.close()
 
@@ -39,8 +41,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="API Lâmpada Inteligente - Telemetria ESP32",
-    description="API REST FastAPI para recebimento de telemetria da Lâmpada Inteligente (ESP32-S3) e persistência em SQLite.",
-    version="1.0.0",
+    description="API REST FastAPI para recebimento de telemetria da Lâmpada Inteligente (ESP32-S3) com Timestamp NTP e persistência em SQLite.",
+    version="1.1.0",
     lifespan=lifespan,
 )
 
@@ -58,16 +60,18 @@ app.add_middleware(
 # MODELOS DE DADOS (PYDANTIC)
 # ============================================================================
 class TelemetriaCreate(BaseModel):
+    timestamp: int = Field(..., description="Timestamp Unix (epoch em segundos) gerado via NTP pelo ESP32")
     temperatura: float = Field(..., description="Temperatura ambiente lida pelo sensor DHT22 (°C)")
     luminosidade: int = Field(..., description="Valor analógico lido pelo LDR")
     potenciometro: int = Field(..., description="Valor analógico lido pelo potenciômetro")
     led_ligado: bool = Field(..., description="Estado do LED RGB (true=ligado, false=desligado)")
-    perigo: bool = Field(..., description="Indicação de perigo térmico (temperatura fora da faixa segura)")
-    sistema_ativo: bool = Field(..., description="Indica se o sistema está ativo ou em mudo/desativado pelo botão")
+    perigo: bool = Field(..., description="Indicação de perigo térmico")
+    sistema_ativo: bool = Field(..., description="Indica se o sistema está ativo ou desativado/mudo")
 
 
 class TelemetriaResponse(BaseModel):
     id: int
+    timestamp: int
     temperatura: float
     luminosidade: int
     potenciometro: int
@@ -93,26 +97,31 @@ def raiz():
 def receber_telemetria(dados: TelemetriaCreate):
     """
     Endpoint chamado pelo ESP32 via HTTP POST.
-    Recebe os dados do JSON e grava no SQLite.
+    Recebe os dados com timestamp e grava no SQLite.
     """
-    agora_iso = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    # Converte o timestamp Unix para data legível se for válido, senão usa a hora do servidor
+    if dados.timestamp and dados.timestamp > 1000000000:
+        data_formatada = datetime.fromtimestamp(dados.timestamp, tz=timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    else:
+        data_formatada = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     try:
         conn = sqlite3.connect(DB_NAME)
         cursor = conn.cursor()
         cursor.execute(
             """
-            INSERT INTO telemetria (temperatura, luminosidade, potenciometro, led_ligado, perigo, sistema_ativo, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO telemetria (timestamp, temperatura, luminosidade, potenciometro, led_ligado, perigo, sistema_ativo, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
+                dados.timestamp,
                 dados.temperatura,
                 dados.luminosidade,
                 dados.potenciometro,
                 1 if dados.led_ligado else 0,
                 1 if dados.perigo else 0,
                 1 if dados.sistema_ativo else 0,
-                agora_iso,
+                data_formatada,
             ),
         )
         conn.commit()
@@ -121,9 +130,10 @@ def receber_telemetria(dados: TelemetriaCreate):
 
         return {
             "status": "sucesso",
-            "mensagem": "Telemetria registrada no banco!",
+            "mensagem": "Telemetria registrada com sucesso!",
             "id": novo_id,
-            "created_at": agora_iso,
+            "timestamp": dados.timestamp,
+            "created_at": data_formatada,
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Erro ao salvar no banco SQLite: {str(e)}")
@@ -140,7 +150,7 @@ def listar_telemetria(limite: Annotated[int, Query(ge=1, le=500, description="Qu
         cursor = conn.cursor()
         cursor.execute(
             """
-            SELECT id, temperatura, luminosidade, potenciometro, led_ligado, perigo, sistema_ativo, created_at
+            SELECT id, timestamp, temperatura, luminosidade, potenciometro, led_ligado, perigo, sistema_ativo, created_at
             FROM telemetria
             ORDER BY id DESC
             LIMIT ?
@@ -155,6 +165,7 @@ def listar_telemetria(limite: Annotated[int, Query(ge=1, le=500, description="Qu
             resultado.append(
                 TelemetriaResponse(
                     id=row["id"],
+                    timestamp=row["timestamp"],
                     temperatura=row["temperatura"],
                     luminosidade=row["luminosidade"],
                     potenciometro=row["potenciometro"],
@@ -181,7 +192,7 @@ def obter_ultima_telemetria():
         cursor = conn.cursor()
         cursor.execute(
             """
-            SELECT id, temperatura, luminosidade, potenciometro, led_ligado, perigo, sistema_ativo, created_at
+            SELECT id, timestamp, temperatura, luminosidade, potenciometro, led_ligado, perigo, sistema_ativo, created_at
             FROM telemetria
             ORDER BY id DESC
             LIMIT 1
@@ -195,6 +206,7 @@ def obter_ultima_telemetria():
 
         return TelemetriaResponse(
             id=linha["id"],
+            timestamp=linha["timestamp"],
             temperatura=linha["temperatura"],
             luminosidade=linha["luminosidade"],
             potenciometro=linha["potenciometro"],
